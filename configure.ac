@@ -14,7 +14,7 @@
 #
 
 AC_PREREQ([2.69])
-AC_INIT([mod_authnz_tailscale], [0.0.1], [stefan@eissing.org])
+AC_INIT([mod_authz_ts_cap], [0.0.1])
 
 LT_PREREQ([2.2.6])
 LT_INIT()
@@ -38,7 +38,7 @@ AC_CANONICAL_TARGET
 
 AC_CONFIG_MACRO_DIR([m4])
 
-AM_INIT_AUTOMAKE([subdir-objects no-define])
+AM_INIT_AUTOMAKE([subdir-objects no-define foreign])
 
 m4_ifdef([AM_SILENT_RULES], [AM_SILENT_RULES([yes])])
 
@@ -309,7 +309,7 @@ AC_SUBST(LIBEXEC_DIR)
 
 AC_CONFIG_FILES([
     Makefile
-    src/mod_authnz_tailscale.h
+    src/mod_authz_ts_cap.h
     src/Makefile
     test/Makefile
     test/pyhttpd/config.ini

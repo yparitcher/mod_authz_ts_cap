@@ -92,3 +92,6 @@ src/mod_authnz_tailscale.h
 test/pyhttpd/config.ini
 __pycache__
 test/gen
+INSTALL
+NEWS
+DISCUSS

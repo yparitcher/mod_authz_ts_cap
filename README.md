@@ -1,6 +1,6 @@
-# mod\_authnz\_tailscale
+# mod\_authz\_ts\_cap
 
-Apache httpd authentication/authorization for tailscale access.
+Apache httpd authorization for tailscale capabilities access.
 
 ## What it does
 
@@ -10,7 +10,7 @@ resources based on where connections come from. For example, if you installed ta
 ```
 <VirtualHost *:443>
   <Location />
-    Require tailscale-user your-id@github
+    Require ts-cap ServerName
   </Location>
   ...
 </VirtualHost>
@@ -28,48 +28,11 @@ Experimental. Available only on Linux machines (or where tailscale provides a un
 
 ## Authorizations
 
-The module adds three authorization directives right now:
+The module adds one authorization directive right now:
 
-1. `tailscale-user`: checks the `LoginName` of the `UserProfile` given by the tailscale demon for the client's address and port.
-2. `tailscale-node`: checks the full node name of the tailscale node behind the client's address and port.
-2. `tailscale-tailnet`: checks the node name suffix of the tailscale node behind the client's address and port.
+1. `ts-cap`: checks the `ServerName` of the `VirtualHost` where this request is coming from and checks if the tailscale capibities include it.
 
-### on a standard tailscale vpn
-
-On a default installation of tailscale, all machines that you add to your tailscale VPN have the same user profile, e.g. `LoginName`. This is what you used to sign up to tailscale, like `john.doe@example.com`. If you used an email on a "shared" identity provider like `github`, this is `your-id@github`.
-
-The directive to check for nodes that belong to your login name would then be:
-
-```
-Require tailscale-user your-id@github
-```
-
-This identity is also used to give your tailscale nodes, e.g. the machines you add, a unique name. This could be something like `machine-name.your-id.github.beta.tailscale.net.`. If you want to allow a specific node access to a Apache `Location`, you would configure:
-
-```
-Require tailscale-node machine-name.your-id.github.beta.tailscale.net.
-```
-
-If you want to give access to all machines your tailscale VPN runs on, do:
-
-```
-Require tailscale-tailnet your-id.github.beta.tailscale.net.
-```
-
-this common suffix among all your nodes is what tailscale calls your `tailnet`.
-
-### Non standard configs
-
-All this above holds true until you start digging deeper into your tailscale configuration and add `tags`
-and other means like tailscale authentication keys to your tailnet. Then you will have nodes in your tailnet
-that have other `LoginName` values. 
-
-For example, you add a raspberry to your tailnet using a special auth key and that raspberry will not carry
-your github id. While in your tailnet, it is not really "you" that it makes connections for.
-
-The need for this is more clear when you consider tailnets for an organization. People add their laptops using
-the company mail id, but the central servers clearly do not belong to a particular person. Also, when Joe leaves
-the company, you do not want your central mail server to go down with him.
+## Tailscale Capabilities
 
 
 
@@ -92,27 +55,13 @@ AuthTailscaleCacheTimeout 30s
 ```
 
 
-## Authentication
-
-The keen reader will have notices that the examples above are all about *Authorization*. If you have 
-a web application running in/behind your Apache, you might want to know *which* user has been allowed access. Configure
-
-```
-<VirtualHost *:443>
-  <Location />
-    AuthType tailscale
-    Require valid-user
-  </Location>
-  ...
-</VirtualHost>
-```
-
-and the tailscale user will be available just like with other authentication mechanisms. For example, a CGI
-process will find `REMOTE_USER` in its environment.
-
 ## How it works
 
 On each machine, there is a `tailscale` demon running which does the routing and encryption. When it accepts network packets, it knows who encrypted them or it does not allow them in. Simplified, a packet from address `a.b.c.d` has to use a specific key and that key belongs to user `XYZ`. Only if `XYZ` is granted access into you tailscale network, will this data ever appear.
 
-The tailscale demon has a local HTTP API, accessible on Linux via a unix domain socket, where one may ask which user is behind a remote address and port. `mod_authnz_tailscale` uses this feature to find the tailscale login behind an incoming HTTP request.
+The tailscale demon has a local HTTP API, accessible on Linux via a unix domain socket, where one may ask which user is behind a remote address and port. `mod_authz_ts_cap` uses this feature to find the tailscale capabilities behind an incoming HTTP request.
+
+## Credits
+
+This is a fork of and based upon the work by @icing (Stefan Eissing) in [https://github.com/icing/mod_authnz_tailscale](https://github.com/icing/mod_authnz_tailscale)
 

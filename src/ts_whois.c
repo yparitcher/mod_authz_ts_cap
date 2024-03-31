@@ -1,6 +1,7 @@
 /***************************************************************************
  *                                  _   _ ____  _
  * Copyright (C) 2022, Stefan Eissing, <stefan@eissing.org>, et al.
+ * Copyright (C) 2024, Y Paritcher <y@paritcher.com>, et al.
  *
  * This software is licensed as described in the file COPYING, which
  * you should have received as part of this distribution. The terms
@@ -45,7 +46,7 @@
 #include <http_protocol.h>
 #include <http_request.h>
 
-#include "mod_authnz_tailscale.h"
+#include "mod_authz_ts_cap.h"
 #include "ts_whois.h"
 
 
@@ -142,7 +143,6 @@ static json_t *json_readb(request_rec *r, apr_bucket_brigade *bb)
 }
 
 typedef struct {
-    ts_whois_t whois;
     apr_pool_t *pool;
     apr_table_t *headers;
     apr_off_t body_limit;
@@ -151,7 +151,7 @@ typedef struct {
 
 static size_t header_cb(void *buffer, size_t elen, size_t nmemb, void *baton)
 {
-    ts_whois_ctx_t *ctx = baton;
+    ts_whois_ctx_t *whois_ctx = baton;
     size_t len, clen = elen * nmemb;
     const char *name = NULL, *value = "", *b = buffer;
     apr_size_t i;
@@ -160,39 +160,39 @@ static size_t header_cb(void *buffer, size_t elen, size_t nmemb, void *baton)
     len = (len && b[len-1] == '\r')? len-1 : len;
     for (i = 0; i < len; ++i) {
         if (b[i] == ':') {
-            name = apr_pstrndup(ctx->pool, b, i);
+            name = apr_pstrndup(whois_ctx->pool, b, i);
             ++i;
             while (i < len && b[i] == ' ') {
                 ++i;
             }
             if (i < len) {
-                value = apr_pstrndup(ctx->pool, b+i, len - i);
+                value = apr_pstrndup(whois_ctx->pool, b+i, len - i);
             }
             break;
         }
     }
 
     if (name != NULL) {
-        apr_table_add(ctx->headers, name, value);
+        apr_table_add(whois_ctx->headers, name, value);
     }
     return clen;
 }
 
 static size_t resp_data_cb(void *data, size_t len, size_t nmemb, void *baton)
 {
-    ts_whois_ctx_t *ctx = baton;
+    ts_whois_ctx_t *whois_ctx = baton;
     size_t blen = len * nmemb;
     apr_status_t rv;
 
-    if (ctx->body) {
-        if (ctx->body_limit) {
+    if (whois_ctx->body) {
+        if (whois_ctx->body_limit) {
             apr_off_t body_len = 0;
-            apr_brigade_length(ctx->body, 0, &body_len);
-            if (body_len + (apr_off_t)blen > ctx->body_limit) {
+            apr_brigade_length(whois_ctx->body, 0, &body_len);
+            if (body_len + (apr_off_t)blen > whois_ctx->body_limit) {
                 return 0; /* signal curl failure */
             }
         }
-        rv = apr_brigade_write(ctx->body, NULL, NULL, (const char *)data, blen);
+        rv = apr_brigade_write(whois_ctx->body, NULL, NULL, (const char *)data, blen);
         if (rv != APR_SUCCESS) {
             /* returning anything != blen will make CURL fail this */
             return 0;
@@ -201,53 +201,40 @@ static size_t resp_data_cb(void *data, size_t len, size_t nmemb, void *baton)
     return blen;
 }
 
-static const char *get_jstring(json_t *jobject, const char *key, const char *defval)
+static const char *get_jstring(json_t *jstring, request_rec *r)
 {
-    json_t *jstr = json_object_get(jobject, key);
-    if (jstr && json_is_string(jstr)) {
-        return json_string_value(jstr);
+    if (jstring && json_is_string(jstring)) {
+        const char *cap =  json_string_value(jstring);
+        if (strlen(cap) > TS_CAP_MAXLEN) {
+             ap_log_rerror(APLOG_MARK, APLOG_TRACE1, 0, r, "cap too long: '%s'", cap);
+        } else {
+        	return cap;
+        }
     }
-    return defval;
+    return NULL;
 }
 
-static int name_is_ok(const char *name, const char *label, request_rec *r)
-{
-    if (!name) {
-        ap_log_rerror(APLOG_MARK, APLOG_TRACE1, 0, r,
-                      "%s not found in response", label);
-        return 0;
-    }
-    if (strlen(name) > TS_NAME_MAXLEN) {
-        ap_log_rerror(APLOG_MARK, APLOG_TRACE1, 0, r,
-                      "%s too long: '%s'", label, name);
-        return 0;
-    }
-    return 1;
-}
-
-apr_status_t ts_whois_get(ts_whois_t *whois, request_rec *r, const char *uds_path)
+apr_status_t ts_whois_get(apr_array_header_t *caps, request_rec *r, const char *uds_path)
 {
     CURL *curl;
     CURLcode curle;
     const char *url;
     apr_status_t rv = APR_SUCCESS;
     apr_pool_t *ptemp = NULL;
-    ts_whois_ctx_t ctx;
+    ts_whois_ctx_t whois_ctx;
     const char *ctype, *s;
     long l;
     json_t *json = NULL;
-    const char *login_name = NULL, *display_name = NULL;
-    const char *profile_pic_url = NULL;
-    const char *node_name = NULL, *tailnet = NULL;
 
     ap_assert(uds_path);
+    apr_array_clear(caps);
 
     curl = curl_easy_init();
     if (!curl) {
         rv = APR_EGENERAL;
         goto leave;
     }
-    memset(&ctx, 0, sizeof(ctx));
+    memset(&whois_ctx, 0, sizeof(whois_ctx));
 
     rv = apr_pool_create(&ptemp, r->pool);
     if (APR_SUCCESS != rv) {
@@ -256,24 +243,25 @@ apr_status_t ts_whois_get(ts_whois_t *whois, request_rec *r, const char *uds_pat
     }
     apr_pool_tag(ptemp, "ts_whois_temp");
 
-    ctx.pool = ptemp;
-    ctx.headers = apr_table_make(ctx.pool, 10);
-    ctx.body_limit = 1024*1024;
-    ctx.body = apr_brigade_create(ctx.pool, r->connection->bucket_alloc);
+    whois_ctx.pool = ptemp;
+    whois_ctx.headers = apr_table_make(whois_ctx.pool, 10);
+    whois_ctx.body_limit = 1024*1024;
+    whois_ctx.body = apr_brigade_create(whois_ctx.pool, r->connection->bucket_alloc);
 
     curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, header_cb);
-    curl_easy_setopt(curl, CURLOPT_HEADERDATA, &ctx);
+    curl_easy_setopt(curl, CURLOPT_HEADERDATA, &whois_ctx);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, resp_data_cb);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &ctx);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &whois_ctx);
 
     curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, timeout_msec(apr_time_from_sec(5)));
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, timeout_msec(apr_time_from_sec(1)));
 
     curl_easy_setopt(curl, CURLOPT_UNIX_SOCKET_PATH, uds_path);
-    curl_easy_setopt(curl, CURLOPT_USERAGENT, MOD_AUTHNZ_TAILSCALE_VERSION);
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, MOD_AUTHZ_TS_CAP_VERSION);
 
-    url = apr_psprintf(ctx.pool, "http://localhost/localapi/v0/whois?addr=%s:%d",
+    url = apr_psprintf(whois_ctx.pool, "http://local-tailscaled.sock/localapi/v0/whois?addr=%s:%d",
                        r->useragent_ip, r->useragent_addr->port);
+
     curl_easy_setopt(curl, CURLOPT_URL, url);
 
     curle = curl_easy_perform(curl);
@@ -296,7 +284,6 @@ apr_status_t ts_whois_get(ts_whois_t *whois, request_rec *r, const char *uds_pat
         case 200:
             break;
         case 404:
-            memset(whois, 0, sizeof(*whois));
             goto leave;
         default:
             ap_log_rerror(APLOG_MARK, APLOG_TRACE1, 0, r,
@@ -306,7 +293,7 @@ apr_status_t ts_whois_get(ts_whois_t *whois, request_rec *r, const char *uds_pat
     }
 
     /* got a 200 response, should have a JSON body */
-    ctype = parse_ct(ctx.pool, apr_table_get(ctx.headers, "content-type"));
+    ctype = parse_ct(whois_ctx.pool, apr_table_get(whois_ctx.headers, "content-type"));
     if (!ctype) {
         ap_log_rerror(APLOG_MARK, APLOG_TRACE1, 0, r,
                       "response has no content-type");
@@ -322,59 +309,33 @@ apr_status_t ts_whois_get(ts_whois_t *whois, request_rec *r, const char *uds_pat
         goto leave;
     }
 
-    json = json_readb(r, ctx.body);
+    json = json_readb(r, whois_ctx.body);
     if (!json) {
         rv = APR_EINVAL;
         goto leave;
     }
     if (json_is_object(json)) {
-        json_t *jprofile, *jnode;
-
-        jprofile = json_object_get(json, "UserProfile");
-        if (jprofile && json_is_object(jprofile)) {
-            login_name = get_jstring(jprofile, "LoginName", NULL);
-            display_name = get_jstring(jprofile, "DisplayName", NULL);
-            profile_pic_url = get_jstring(jprofile, "ProfilePicURL", NULL);
-        }
-
-        jnode = json_object_get(json, "Node");
-        if (jnode && json_is_object(jnode)) {
-            const char *node_comp_name;
-
-            node_name = get_jstring(jnode, "Name", NULL);
-            node_comp_name = get_jstring(jnode, "ComputedName", NULL);
-            if (node_name && node_comp_name) {
-                size_t nlen = strlen(node_comp_name);
-                if (strlen(node_name) > nlen + 1
-                    && node_name[nlen] == '.'
-                    && !strncmp(node_name, node_comp_name, nlen)) {
-                    tailnet = node_name + nlen + 1;
-                }
-            }
+        json_t *capmap;
+        capmap = json_object_get(json, "CapMap");
+        if (capmap && json_is_object(capmap)) {
+            json_t *servername;
+            servername = json_object_get(capmap, "httpd.apache.org/ts-cap/ServerName");
+	        if (servername && json_is_array(servername)) {
+	             size_t servername_len = json_array_size(servername);
+	             if (servername_len > 0){
+	             size_t index;
+				json_t *value;
+				json_array_foreach(servername, index, value) {
+	                     const char *s = get_jstring(value, r);
+	                     if (s != NULL) {
+	                          *(const char**)apr_array_push(caps)  = apr_pstrdup(r->connection->pool, s);
+	                     }
+	                 }
+	             }
+             }
         }
     }
-
-    if (!name_is_ok(login_name, "LoginName", r)
-        && !name_is_ok(node_name, "NodeName", r)
-        && !name_is_ok(tailnet, "Tailnet", r)) {
-        rv = APR_EINVAL;
-        goto leave;
-    }
-
-    ap_log_rerror(APLOG_MARK, APLOG_TRACE1, 0, r,
-                  "tailscale LoginName(%s), tailnet(%s)",
-                  login_name? login_name : "-",
-                  tailnet? tailnet : "-");
-    memset(whois, 0, sizeof(*whois));
-    if (login_name) strcpy(whois->login_name, login_name);
-    if (node_name) strcpy(whois->node_name, node_name);
-    if (tailnet) strcpy(whois->tailnet, tailnet);
-    if (display_name && strlen(display_name) <= TS_NAME_MAXLEN) {
-       strcpy(whois->display_name, display_name);
-    }
-    if (profile_pic_url && strlen(profile_pic_url) <= TS_NAME_MAXLEN) {
-       strcpy(whois->profile_pic_url, profile_pic_url);
-    }
+    ap_log_rerror(APLOG_MARK, APLOG_TRACE1, 0, r, "tailscale capabilities: %s", apr_array_pstrcat(r->connection->pool, caps, ','));
 
 leave:
     if (curl) curl_easy_cleanup(curl);

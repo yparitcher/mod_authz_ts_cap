@@ -16,32 +16,32 @@
 ACLOCAL_AMFLAGS = -I m4
 AUTOMAKE_OPTIONS = foreign
 
-lib_LTLIBRARIES = mod_authnz_tailscale.la
+lib_LTLIBRARIES = mod_authz_ts_cap.la
 
 #---------------------------------------------------------------------------------------------------
-# mod_authnz_tailscale for httpd
+# mod_authz_ts_cap for httpd
 #---------------------------------------------------------------------------------------------------
 
-mod_authnz_tailscale_la_CPPFLAGS = -g -I../src -std=c99 -D_GNU_SOURCE @WERROR_CFLAGS@
-mod_authnz_tailscale_la_LDFLAGS  = -module -ljansson -lcurl -export-symbols-regex authnz_tailscale_module
+mod_authz_ts_cap_la_CPPFLAGS = -g -I../src -std=c99 -D_GNU_SOURCE @WERROR_CFLAGS@
+mod_authz_ts_cap_la_LDFLAGS  = -module -ljansson -lcurl -export-symbols-regex authz_ts_cap_module
 
 
 OBJECTS = \
-    mod_authnz_tailscale.c \
+    mod_authz_ts_cap.c \
     ts_whois.c
 
 HFILES = \
-	mod_authnz_tailscale.h \
+	mod_authz_ts_cap.h \
     ts_whois.h
 
-mod_authnz_tailscale_la_SOURCES = $(HFILES) $(OBJECTS)
+mod_authz_ts_cap_la_SOURCES = $(HFILES) $(OBJECTS)
 
-all: mod_authnz_tailscale.la
+all: mod_authz_ts_cap.la
 
 #---------------------------------------------------------------------------------------------------
 # installations
 #---------------------------------------------------------------------------------------------------
 
-install-exec-local: mod_authnz_tailscale.la
+install-exec-local: mod_authz_ts_cap.la
 	$(MKDIR_P) $(DESTDIR)/@LIBEXEC_DIR@
-	$(APXS) -i -S LIBEXECDIR=$(DESTDIR)/@LIBEXEC_DIR@ -n md mod_authnz_tailscale.la
+	$(APXS) -i -S LIBEXECDIR=$(DESTDIR)/@LIBEXEC_DIR@ -n md mod_authz_ts_cap.la

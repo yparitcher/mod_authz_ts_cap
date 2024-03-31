@@ -16,11 +16,32 @@
  *
  ***************************************************************************/
 
-#ifndef mod_authz_ts_cap_ts_whois_h
-#define mod_authz_ts_cap_ts_whois_h
+#ifndef mod_authz_ts_cap_h
+#define mod_authz_ts_cap_h
 
-#define TS_CAP_MAXLEN      127
+#undef PACKAGE_VERSION
+#undef PACKAGE_TARNAME
+#undef PACKAGE_STRING
+#undef PACKAGE_NAME
+#undef PACKAGE_BUGREPORT
 
-apr_status_t ts_whois_get(apr_array_header_t *caps, request_rec *r, const char *uds_path);
+/**
+ * @macro
+ * Version number of the md module as c string
+ */
+#define MOD_AUTHZ_TS_CAP_VERSION "@PACKAGE_VERSION@-git"
 
-#endif
+/* user agent for requests */
+#define MOD_AUTHZ_TS_CAP_UA      "Apache mod_authz_ts_cap "##MOD_AUTHZ_TS_CAP_VERSION
+
+/**
+ * @macro
+ * Numerical representation of the version number of the module
+ * release. This is a 24 bit number with 8 bits for major number, 8 bits
+ * for minor and 8 bits for patch. Version 1.2.3 becomes 0x010203.
+ */
+#define MOD_AUTHZ_TS_CAP_VERSION_NUM @PACKAGE_VERSION_NUM@
+
+#define TAILSCALE_DEF_URL    "@TAILSCALE_DEF_URL@"
+
+#endif /* mod_authz_ts_cap_h */
