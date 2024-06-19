@@ -259,8 +259,14 @@ apr_status_t ts_whois_get(apr_array_header_t *caps, request_rec *r, const char *
     curl_easy_setopt(curl, CURLOPT_UNIX_SOCKET_PATH, uds_path);
     curl_easy_setopt(curl, CURLOPT_USERAGENT, MOD_AUTHZ_TS_CAP_VERSION);
 
-    url = apr_psprintf(whois_ctx.pool, "http://local-tailscaled.sock/localapi/v0/whois?addr=%s:%d",
+    ap_log_rerror(APLOG_MARK, APLOG_TRACE1, 0, r, "tailscale addr family: %d", r->connection->client_addr->family);
+    if (r->connection->client_addr->family == 6) {
+        url = apr_psprintf(whois_ctx.pool, "http://local-tailscaled.sock/localapi/v0/whois?addr=%s:%d",
                        r->useragent_ip, r->useragent_addr->port);
+    } else {
+        url = apr_psprintf(whois_ctx.pool, "http://local-tailscaled.sock/localapi/v0/whois?addr=%s:%d",
+                       r->useragent_ip, r->useragent_addr->port);
+    }
 
     curl_easy_setopt(curl, CURLOPT_URL, url);
 
